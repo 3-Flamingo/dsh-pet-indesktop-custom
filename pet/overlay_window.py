@@ -835,7 +835,8 @@ class OverlayWindow(QWidget):
             return
         # behavior 由集成层持有（demo/未来 AppShell 挂在 overlay 上），基类不拥有
         menu = build_sprite_menu(self, target, behavior=getattr(self, "behavior", None))
-        menu.exec(event.globalPos())
+        from .menu_dismiss import run_menu
+        run_menu(menu, event.globalPos())
         event.accept()
 
     def mousePressEvent(self, event) -> None:

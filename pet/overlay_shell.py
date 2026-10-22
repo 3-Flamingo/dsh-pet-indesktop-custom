@@ -940,7 +940,10 @@ class ShellOverlayWindow(OverlayWindow):
             event.ignore()
             return
         menu = builder(target)
-        menu.exec(event.globalPos())
+        # 走 run_menu：桌宠窗不激活，Qt 原生的"点菜单外部自动关闭"不触发
+        # （见 pet/menu_dismiss.py 头部说明）。
+        from .menu_dismiss import run_menu
+        run_menu(menu, event.globalPos())
         self._dispatch_deferred_menu_callbacks(menu)
         release_menu_tree(menu)
         event.accept()
@@ -984,7 +987,8 @@ class ShellOverlayWindow(OverlayWindow):
         if target is None:
             return
         menu = builder(target)
-        menu.exec(global_pos)
+        from .menu_dismiss import run_menu
+        run_menu(menu, global_pos)
         self._dispatch_deferred_menu_callbacks(menu)
         release_menu_tree(menu)
 

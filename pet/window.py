@@ -3590,7 +3590,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
     def _exec_context_menu(self, menu: QMenu, position: QPoint) -> None:
         """Execute a context menu through a patchable seam."""
-        menu.exec(position)
+        from .menu_dismiss import run_menu
+        run_menu(menu, position)
 
     def _show_context_menu(self, global_pos: QPoint) -> None:
         # 右键菜单弹出 = 用户交互：刷新闲置降帧的活跃锚点。
@@ -3653,7 +3654,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             if callable(executor):
                 executor(menu, transition_start)
             else:
-                menu.exec(transition_start)
+                from .menu_dismiss import run_menu
+                run_menu(menu, transition_start)
         finally:
             self._context_menu_open = False
             if callable(update_hold):
