@@ -267,6 +267,48 @@ def city_code_for(config, city) -> str:
     return codes.get(name) or codes.get(base_city_name(name)) or ""
 
 
+#: ``sk_2d`` 认的地区码位数；更长的街道级码已失效（2026-10 实测 302 → 404）。
+_CN_DISTRICT_CODE_LEN = 9
+
+
+def cn_code_variants(code) -> tuple[str, ...]:
+    """一个地区码的可用变体：完整码在前，12 位街道码再退到 9 位区县码。
+
+    2026-10-22 实测：``101020200005``（马桥镇）在 ``sk_2d`` 上 302 到 404 页面，
+    同一地点只要退到前 9 位 ``101020200``（闵行）就正常返回数据。
+    """
+    value = str(code or "").strip()
+    if not value:
+        return ()
+    variants = [value]
+    if len(value) > _CN_DISTRICT_CODE_LEN and value.isdigit():
+        variants.append(value[:_CN_DISTRICT_CODE_LEN])
+    return tuple(variants)
+
+
+def open_meteo_query_names(city) -> tuple[str, ...]:
+    """源 B 地理编码的候选名：基础名 → 标签两侧 → 全串（去重保序）。
+
+    「马桥镇 · 上海」→ ``("马桥镇", "上海", "马桥镇 · 上海")``：镇级名 GeoNames
+    多半没有，但标签后半段的城市名一定有。
+    """
+    names: list[str] = []
+
+    def _add(value) -> None:
+        name = normalize_city_name(value)
+        if name and name not in names:
+            names.append(name)
+
+    _add(base_city_name(city))
+    raw = normalize_city_name(city)
+    for separator in _BASE_NAME_SEPARATORS:
+        if separator in raw:
+            for part in raw.split(separator):
+                _add(part)
+    _add(raw)
+    return tuple(names)
+
+
 def same_city(left, right) -> bool:
     """两个写法是否指同一座城市（把后缀变体算进来：「鹿城」≡「鹿城区」）。"""
     return bool(set(city_name_variants(left)) & set(city_name_variants(right)))
@@ -654,15 +696,25 @@ class WeatherClient:
 
         按码取失败时回落到城市检索——地区码表是"尽量精确"而不是硬约束（换版本、
         手改配置都可能对不上），宁可慢一步也不要因此整源失败。
+
+        2026-10-22 修复：检索返回的**街道级 12 位码**（如「马桥镇 · 上海」的
+        101020200005）在 ``sk_2d`` 上已经失效——接口 302 跳到 404 页面，解析必然
+        失败；旧实现回落检索后又 ``pick_candidate`` 到同一个坏码，等于没回退，
+        最终只剩一句「返回数据无效」。现在按码取数会先试 9 位前缀（区县级），
+        仍失败就按候选顺序逐个试，直到有一条能解析——真机实测 101020200005 →
+        101020200（闵行）即可取到数据。
         """
-        if code:
+        tried: set[str] = set()
+        last_failure = ""
+        for candidate_code in cn_code_variants(code):
+            tried.add(candidate_code)
             try:
-                payload = self._get(CN_CURRENT_URL.format(code=code), use_proxy=False,
+                payload = self._get(CN_CURRENT_URL.format(code=candidate_code), use_proxy=False,
                                     deadline=deadline, referer=CN_REFERER)
                 return parse_cn_reading(payload, fallback_city=base_city_name(city))
-            except Exception as exc:  # noqa: BLE001 - 回落检索，原因记日志
-                log.warning("按地区码取数失败 %s（%s）：%s，回退城市检索",
-                            city, code, describe_error(exc))
+            except Exception as exc:  # noqa: BLE001 - 换下一个码/回落检索，原因记日志
+                last_failure = describe_error(exc)
+                log.warning("按地区码取数失败 %s（%s）：%s", city, candidate_code, last_failure)
         candidates, reason = self.search_cities(city, deadline=deadline)
         if reason:
             raise WeatherError(f"城市检索失败：{reason}")
@@ -671,27 +723,48 @@ class WeatherClient:
         )
         if picked is None:
             raise WeatherError("没有找到这个城市")
-        url = CN_CURRENT_URL.format(code=picked.code)
-        payload = self._get(url, use_proxy=False, deadline=deadline, referer=CN_REFERER)
-        return parse_cn_reading(payload, fallback_city=picked.name)
+        ordered = [picked] + [c for c in candidates if c is not picked]
+        for candidate in ordered:
+            for candidate_code in cn_code_variants(candidate.code):
+                if candidate_code in tried:
+                    continue
+                tried.add(candidate_code)
+                try:
+                    payload = self._get(CN_CURRENT_URL.format(code=candidate_code),
+                                        use_proxy=False, deadline=deadline,
+                                        referer=CN_REFERER)
+                    return parse_cn_reading(payload, fallback_city=candidate.name)
+                except Exception as exc:  # noqa: BLE001 - 换下一个候选
+                    last_failure = describe_error(exc)
+                    log.warning("按候选地区码取数失败 %s（%s）：%s",
+                                candidate.name, candidate_code, last_failure)
+        if last_failure:
+            raise WeatherError(f"没有找到这个城市（{last_failure}）")
+        raise WeatherError("没有找到这个城市")
 
     # ---- 源 B：open-meteo（跟随系统代理）
     def _fetch_open_meteo(self, city: str, deadline: float | None) -> WeatherReading:
-        name = base_city_name(city)     # 歧义标签（「朝阳 · 辽宁」）不能整串当地名查
-        geocode_url = OM_GEOCODE_URL.format(query=urllib.parse.quote(name))
-        payload = json.loads(self._get(geocode_url, use_proxy=True, deadline=deadline))
-        results = payload.get("results") if isinstance(payload, dict) else None
-        if not results:
-            raise WeatherError("没有找到这个城市")
-        first = results[0] if isinstance(results, list) else {}
-        if not isinstance(first, dict) or "latitude" not in first or "longitude" not in first:
-            raise WeatherError("返回数据里没有坐标")
-        display = str(first.get("name") or name)
-        forecast_url = OM_FORECAST_URL.format(
-            lat=first["latitude"], lon=first["longitude"]
-        )
-        forecast = json.loads(self._get(forecast_url, use_proxy=True, deadline=deadline))
-        return parse_open_meteo_reading(forecast, display)
+        """源 B 取数：地理编码按候选名逐个试（基础名 → 标签两侧 → 全串）。
+
+        2026-10-22 修复：「马桥镇 · 上海」这类镇级标签只拿前半段去 GeoNames 查不到
+        （它没有这个镇），旧实现因此整源失败；现在会退到后半段（上海）再试一次。
+        """
+        for name in open_meteo_query_names(city):
+            geocode_url = OM_GEOCODE_URL.format(query=urllib.parse.quote(name))
+            payload = json.loads(self._get(geocode_url, use_proxy=True, deadline=deadline))
+            results = payload.get("results") if isinstance(payload, dict) else None
+            if not results:
+                continue
+            first = results[0] if isinstance(results, list) else {}
+            if not isinstance(first, dict) or "latitude" not in first or "longitude" not in first:
+                raise WeatherError("返回数据里没有坐标")
+            display = str(first.get("name") or name)
+            forecast_url = OM_FORECAST_URL.format(
+                lat=first["latitude"], lon=first["longitude"]
+            )
+            forecast = json.loads(self._get(forecast_url, use_proxy=True, deadline=deadline))
+            return parse_open_meteo_reading(forecast, display)
+        raise WeatherError("没有找到这个城市")
 
     # ---- 对外
     def fetch(self, city: str, *, code: str = "",
