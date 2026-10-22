@@ -39,6 +39,40 @@
 
 **修法 B**：`open_meteo_query_names()` 按 基础名 → 标签两侧（上海）→ 全串 逐个试。
 
+## 本地重建脚本
+
+`tools/rebuild.ps1` 把「ruff + 聚焦测试 → PyInstaller onedir → 换部署 → 重启验证」
+串成一条命令（Windows / PowerShell 5.1+）：
+
+```powershell
+# 默认：解释器 <repo>\.venv\Scripts\python.exe，部署目录 <repo>\deploy
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\rebuild.ps1
+
+# 全部显式指定
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\rebuild.ps1 `
+    -Source . -Python .\.venv\Scripts\python.exe -DeployTo D:\pet-deploy
+
+# 只换部署（复用 dist-onedir 里的产物，约 15 秒）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\rebuild.ps1 -SkipBuild
+```
+
+| 参数 | 说明 |
+|---|---|
+| `-SkipTests` | 跳过 ruff + 聚焦测试 |
+| `-SkipBuild` | 跳过 PyInstaller，用现有 `dist-onedir` 产物换部署 |
+| `-NoRestart` | 换完不自动启动 |
+
+退出码 `0/1/2/3` = 成功 / 测试失败 / 构建失败 / 部署或启动失败；
+日志 `build-logs\rebuild-<时间戳>.log`；上一代部署留在 `<deploy>.bak`，
+`Move-Item '<deploy>.bak' '<deploy>' -Force` 即回退。
+
+实测：全量（含 PyInstaller）约 **2.6 分钟**，`-SkipBuild` 约 **15 秒**。
+
+> 脚本里已经吸收了两个坑：PS 5.1 的 `$ErrorActionPreference='Stop'` 会把 PyInstaller
+> 写在 stderr 的日志当成致命错误（所以外部命令统一走 `Run-External`）；测试用的
+> `QT_QPA_PLATFORM=offscreen` 必须在上游打包的窗口冒烟测试之前清掉，否则冒烟测试
+> 永远等不到窗口、构建假失败。
+
 ## 构建
 
 上游的 onedir 打包流程见 [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)：
