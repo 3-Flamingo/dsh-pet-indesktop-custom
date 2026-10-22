@@ -84,3 +84,8 @@ android/**/build/
 *.keystore
 *.jks
 dist-android/
+
+# 本地重建脚本（tools/rebuild.ps1）产生的目录
+build-logs/
+deploy/
+deploy.bak/
