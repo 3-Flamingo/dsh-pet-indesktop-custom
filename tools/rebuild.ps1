@@ -118,6 +118,7 @@ if (-not $SkipTests) {
 
     $focus = @(
         'tests/test_menu_dismiss.py',
+        'tests/test_netease_playing.py',
         'tests/test_weather.py',
         'tests/test_weather_fallback.py',
         'tests/test_context_menu_lifecycle.py',

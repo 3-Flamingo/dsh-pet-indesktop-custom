@@ -733,6 +733,11 @@ class MusicLyricController(QObject):
                     allow_browser=self._browser_media_enabled(),
                     allow_foobar=self._foobar_lyrics_enabled(),
                     foobar_title_format=self._foobar_title_format(),
+                    # 走到这条采样线程就说明歌词显示开着（控制器只在启用时装
+                    # 定时器）：网易云不注册 SMTC，必须允许窗口标题兜底，否则
+                    # 这条链路对它永远是空的。唱歌判定那条路径不传（默认关），
+                    # 保持旧行为。
+                    allow_netease=True,
                 )
             except Exception:
                 playback = None

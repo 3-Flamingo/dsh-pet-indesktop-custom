@@ -47,48 +47,66 @@ PROCESS_SCAN_TTL_SECONDS = 2.0
 _MAX_WINDOWS = 8
 
 _pid_lock = threading.Lock()
-_pid_cache: tuple[float, tuple[int, ...]] | None = None
+#: 按 exe 名分别缓存：(扫描时刻, pids)。foobar 与网易云各自一份，互不顶掉。
+_pid_caches: dict[str, tuple[float, tuple[int, ...]]] = {}
 
 
-def _scan_pids() -> tuple[int, ...]:
-    """扫一遍 foobar2000.exe 的 pid；没有 psutil / 扫描失败一律按"没在跑"。"""
+def _scan_pids(exe_name: str) -> tuple[int, ...]:
+    """扫一遍指定 exe 的 pid；没有 psutil / 扫描失败一律按"没在跑"。"""
     try:
         import psutil
     except Exception:
+        return ()
+    wanted = str(exe_name or "").lower()
+    if not wanted:
         return ()
     pids: list[int] = []
     try:
         for proc in psutil.process_iter(["name"]):
             try:
-                if str(proc.info.get("name") or "").lower() == FOOBAR_EXE:
+                if str(proc.info.get("name") or "").lower() == wanted:
                     pids.append(int(proc.pid))
             except Exception:
                 continue
     except Exception:
-        log.debug("扫描 foobar2000 进程失败", exc_info=True)
+        log.debug("扫描进程失败（%s）", exe_name, exc_info=True)
         return ()
     return tuple(pids)
 
 
-def foobar_pids(*, use_cache: bool = True) -> tuple[int, ...]:
-    """当前在跑的 foobar2000 进程 pid（带 TTL 缓存，见模块常量）。"""
-    global _pid_cache
+def pids_for(exe_name: str, *, use_cache: bool = True) -> tuple[int, ...]:
+    """当前在跑的指定进程 pid（按 exe 名分别做 TTL 缓存）。"""
+    key = str(exe_name or "").lower()
     now = time.monotonic()
     with _pid_lock:
-        cached = _pid_cache
+        cached = _pid_caches.get(key)
     if use_cache and cached is not None and (now - cached[0]) <= PROCESS_SCAN_TTL_SECONDS:
         return cached[1]
-    pids = _scan_pids()
+    pids = _scan_pids(key)
     with _pid_lock:
-        _pid_cache = (time.monotonic(), pids)
+        _pid_caches[key] = (time.monotonic(), pids)
     return pids
+
+
+def foobar_pids(*, use_cache: bool = True) -> tuple[int, ...]:
+    """当前在跑的 foobar2000 进程 pid（带 TTL 缓存，见模块常量）。"""
+    return pids_for(FOOBAR_EXE, use_cache=use_cache)
 
 
 def reset_pid_cache() -> None:
     """清掉进程缓存（测试用；产品路径不需要）。"""
-    global _pid_cache
     with _pid_lock:
-        _pid_cache = None
+        _pid_caches.clear()
+
+
+def window_titles_for(exe_name: str) -> list[str]:
+    """指定播放器进程的**无属主可见顶层窗口**标题（Windows；其他平台返回空）。
+
+    公开出来是给 ``pet/netease_playing.py`` 用的：网易云的标题格式比 foobar 稳定
+    （``歌名 - 歌手``），它要在拿到原始标题后自己切分，而不是走 foobar 的"不猜"
+    解析。
+    """
+    return _window_titles_for_pids(pids_for(exe_name))
 
 
 def _window_titles_for_pids(pids) -> list[str]:
@@ -145,12 +163,12 @@ def _window_titles_for_pids(pids) -> list[str]:
     return titles
 
 
-def read_track(title_format: str = "") -> tuple[str, str] | None:
-    """读 foobar2000 正在播的 ``(歌名, 歌手)``；读不到返回 ``None``。
+def _track_from_pids(pids, title_format: str = "") -> tuple[str, str] | None:
+    """从给定进程的窗口标题里挑一条最像曲目标题的，解析成 ``(歌名, 歌手)``。
 
-    任何异常都按"读不到"处理——歌词只是锦上添花，不能因为第三方程序影响桌宠。
+    抽成独立函数是为了保住 ``read_track`` 的两个测试接缝：既有用例 patch 的是
+    ``foobar_pids`` 与 ``_window_titles_for_pids``，参数化以后仍走这两个名字。
     """
-    pids = foobar_pids()
     if not pids:
         return None
     candidates: list[tuple[int, tuple[str, str]]] = []
@@ -164,3 +182,21 @@ def read_track(title_format: str = "") -> tuple[str, str] | None:
     # 总比这些窗口的标题长，取最长的一条。
     candidates.sort(key=lambda item: item[0], reverse=True)
     return candidates[0][1]
+
+
+def read_track_for(exe_name: str, title_format: str = "") -> tuple[str, str] | None:
+    """读指定播放器窗口标题里的 ``(歌名, 歌手)``；读不到返回 ``None``。
+
+    与 :func:`read_track` 同一套实现，只是进程名参数化——网易云（``cloudmusic.exe``）
+    这类**不注册 SMTC** 的播放器走的就是这条路（见 ``pet/netease_playing.py``）。
+    任何异常都按"读不到"处理。
+    """
+    return _track_from_pids(pids_for(exe_name), title_format)
+
+
+def read_track(title_format: str = "") -> tuple[str, str] | None:
+    """读 foobar2000 正在播的 ``(歌名, 歌手)``；读不到返回 ``None``。
+
+    任何异常都按"读不到"处理——歌词只是锦上添花，不能因为第三方程序影响桌宠。
+    """
+    return _track_from_pids(foobar_pids(), title_format)

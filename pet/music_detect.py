@@ -87,6 +87,24 @@ def _get_meter():
     return _meter
 
 
+def audio_peak_level() -> float | None:
+    """默认输出设备的瞬时峰值电平（0.0~1.0）；取不到返回 ``None``。
+
+    消费者是「网易云不上报 SMTC」时的兜底源（``now_playing._read_netease_playback``）：
+    窗口标题分辨不出播放状态，只能拿"系统有没有在出声"当在播判据。取不到时按
+    ``None`` 返回，由调用方决定（*不*当成 0，免得把"读不到"误判成"暂停"）。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        meter = _get_meter()
+        if meter is None:
+            return None
+        return float(meter.GetPeakValue())
+    except Exception:
+        return None
+
+
 def is_music_playing() -> bool:
     """系统是否正在播放**音乐**（Windows；其他平台恒 False）。
 

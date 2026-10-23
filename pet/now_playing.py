@@ -32,6 +32,7 @@ import time
 from dataclasses import dataclass
 
 from . import foobar_playing
+from . import netease_playing
 
 # 判定"不上报进度"的阈值：末位时长小于该值视为无效时间轴。
 _MIN_VALID_DURATION = 0.01
@@ -404,27 +405,69 @@ def _read_foobar_playback(allow_foobar: bool, title_format: str) -> Playback | N
     )
 
 
+def _read_netease_playback() -> Playback | None:
+    """网易云补充源：读主窗口标题，用系统音频峰值判"在不在播"。
+
+    2026-10-23 实测：网易云音乐 3.1.42 **不注册 SMTC**（会话列表里只有浏览器），
+    所以 SMTC 链路永远看不见它——歌词与「歌词对齐」因此一直是死的。它和 foobar
+    一样只能读窗口标题（``歌名 - 歌手``），也没有进度。
+
+    与 foobar 源的两点不同：
+
+    - **没有开关**：网易云是国内最常见的播放器，用户打开「显示歌词」就是冲着它
+      来的，再藏一个开关只会让人以为功能坏了；
+    - **用音频峰值否决"暂停"**：标题停在上一首、人已暂停时不该继续滚歌词。
+      峰值读不到（``None``）时按"在播"处理——宁可多显示一次，也不要把读不到
+      当成暂停。
+    """
+    parsed = netease_playing.read_track("")
+    if parsed is None:
+        return None
+    from . import music_detect  # 延迟导入：music_detect 反向惰性引用本模块
+
+    peak = music_detect.audio_peak_level()
+    if peak is not None and peak <= music_detect.MUSIC_PEAK_THRESHOLD:
+        return None
+    title, artist = parsed
+    return Playback(
+        track=Track(title=title, artist=artist, playing=True),
+        position=None,
+        updated_at=time.monotonic(),
+        app_id=netease_playing.NETEASE_APP_ID,
+    )
+
+
 async def _read_async(
     tracked_app_id: str | None = None,
     *,
     allow_browser: bool = True,
     allow_foobar: bool = False,
     foobar_title_format: str = "",
+    allow_netease: bool = False,
 ) -> Playback | None:
     manager_cls = _import_winrt()
     if manager_cls is None:
-        # 没有 WinRT（非 Windows / 未装可选依赖）：SMTC 无从查起。foobar 的窗口
-        # 标题源不依赖 WinRT，仍可作补充——两者都不行时才返回 None。
-        return _read_foobar_playback(allow_foobar, foobar_title_format)
+        # 没有 WinRT（非 Windows / 未装可选依赖）：SMTC 无从查起。窗口标题类
+        # 补充源不依赖 WinRT，仍可作补充——都没有时才返回 None。
+        fallback = _read_foobar_playback(allow_foobar, foobar_title_format)
+        if fallback is not None:
+            return fallback
+        return _read_netease_playback() if allow_netease else None
     manager = await manager_cls.request_async()
     snapshot = _pick_singing_session(
         _session_snapshots(manager), tracked_app_id, allow_browser
     )
-    # foobar 是**补充源**：SMTC 有在播会话时绝不问它（见 _read_foobar_playback）。
+    # 窗口标题类补充源：SMTC 有在播会话时绝不问它们（见两个 _read_*_playback）。
+    # 顺序 = 兼容性优先：先 foobar（用户显式开开关的那个），再网易云
+    # （Windows 上最常用、且实测不注册 SMTC 的那个）。
     if snapshot is None or not snapshot.playing:
         fallback = _read_foobar_playback(allow_foobar, foobar_title_format)
         if fallback is not None:
             return fallback
+        if allow_netease:
+            fallback = _read_netease_playback()
+            if fallback is not None:
+                return fallback
     if snapshot is None:
         # 没有可接受的候选：既可能是"没有会话"，也可能是"只有在播的视频/被否决
         # 的浏览器会话"。两种都与"无标题"同一口径——不显示、不取词、不唱歌。
@@ -624,6 +667,7 @@ def get_now_playing(
     allow_browser: bool = True,
     allow_foobar: bool = False,
     foobar_title_format: str = "",
+    allow_netease: bool = False,
 ) -> Playback | None:
     """返回当前播放信息；无播放器/无会话/任何异常时返回 ``None``。
 
@@ -640,6 +684,11 @@ def get_now_playing(
     ``pet/foobar_playing.py``）。``foobar_title_format`` 是用户在 foobar 里配置的
     窗口标题格式串，空串 = 自动（不猜歌名/歌手顺序）。
 
+    ``allow_netease=True``（歌词显示开着）时，同样在没有在播 SMTC 会话的情况下
+    读网易云主窗口标题（网易云 3.x 实测完全不注册 SMTC）。默认关闭，是为了让
+    "不关心歌词"的调用路径（唱歌判定等）保持旧行为、也让测试不必依赖本机装了
+    哪个播放器。
+
     本函数绝不抛异常——歌词只是锦上添花，不能因为第三方接口异常影响桌宠本体。
     """
     if sys.platform != "win32":
@@ -651,6 +700,7 @@ def get_now_playing(
                 allow_browser=allow_browser,
                 allow_foobar=allow_foobar,
                 foobar_title_format=foobar_title_format,
+                allow_netease=allow_netease,
             )
         )
     except Exception:
