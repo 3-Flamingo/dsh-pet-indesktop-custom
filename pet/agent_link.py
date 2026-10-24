@@ -2944,9 +2944,24 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
 
 class CursorMonitor(BaseAgentMonitor):
     """Cursor 监视器。
-    扫描 Path.home() / .cursor / projects / ** / agent-transcripts / *.jsonl，
-    多文件增量 tail（上限 50 个文件）。
+
+    扫描 ``~/.cursor/projects/**/agent-transcripts`` 下的会话记录，多文件增量
+    tail（上限 50 个文件）。Cursor 的落盘布局换过一次：
+
+    - 旧布局：``agent-transcripts/*.jsonl``
+    - 现行布局：``agent-transcripts/<会话id>/<会话id>.jsonl``
+
+    只盯这两层。``subagents/`` 里的子代理记录不跟——它们的起停会把主会话的
+    状态刷乱（同 OpenCode 过滤子会话的理由）。
     """
+
+    #: 目录发现用的 glob。两条都要：只留旧的那条时，现行布局一个文件都匹配不到，
+    #: 勾上 Cursor 联动之后桌宠永远没有状态可报。
+    _TRANSCRIPT_GLOBS = (
+        "**/agent-transcripts/*.jsonl",
+        "**/agent-transcripts/*/*.jsonl",
+    )
+
     def __init__(self, config_dir: Path, parent=None, base_dir: Path | None = None) -> None:
         super().__init__("cursor", config_dir, parent)
         self.cursor_base = base_dir or (Path.home() / ".cursor" / "projects")
@@ -2970,15 +2985,17 @@ class CursorMonitor(BaseAgentMonitor):
             self._last_scan = now
             try:
                 one_day_ago = now - 86400
-                files = []
-                for p in self.cursor_base.glob("**/agent-transcripts/*.jsonl"):
-                    try:
-                        if p.stat().st_mtime >= one_day_ago:
-                            files.append(p)
-                    except OSError:
-                        pass
-                files = sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)[:50]
-                candidates = {str(f) for f in files}
+                found: dict[str, float] = {}
+                for pattern in self._TRANSCRIPT_GLOBS:
+                    for p in self.cursor_base.glob(pattern):
+                        try:
+                            mtime = p.stat().st_mtime
+                        except OSError:
+                            continue
+                        if mtime >= one_day_ago:
+                            found[str(p)] = mtime
+                ranked = sorted(found, key=lambda key: found[key], reverse=True)[:50]
+                candidates = set(ranked)
                 # 淘汰不再活跃的 tailer，防止长时间运行无限增长
                 for stale in [k for k in self._tailers if k not in candidates]:
                     del self._tailers[stale]

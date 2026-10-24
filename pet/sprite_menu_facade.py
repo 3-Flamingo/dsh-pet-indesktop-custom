@@ -451,6 +451,18 @@ class SpriteMenuFacade:
         return _first_callable(self._hosts(), ("toggle_festival_reminder",))
 
     @property
+    def on_fortune_ask(self):
+        """「AI算命」的解读：``PetInstance.open_chat_with_message``，走当前对话模型。"""
+        if not self._chat_enabled():
+            return None
+        return _first_callable(self._hosts(), ("open_chat_with_message",))
+
+    @property
+    def on_fortune_manage(self):
+        """「管理算命对象」：``PetInstance.open_fortune_profiles``。"""
+        return _first_callable(self._hosts(), ("open_fortune_profiles",))
+
+    @property
     def on_divination_draw(self):
         """「抽支签」：``AppShell.trigger_divination_draw``。
 

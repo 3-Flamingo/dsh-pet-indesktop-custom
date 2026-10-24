@@ -619,6 +619,9 @@ class PetInstance:
         # 每日一签：菜单「抽支签」→ 出当天的签；on_user_interaction 供
         # 窗口在"用户点了桌宠"时回调（当天没看才提示一行）。
         win.on_divination_draw = self._slot_wrap(self.shell.trigger_divination_draw)
+        win.on_fortune_ask = (
+            self._slot_wrap(self.open_chat_with_message) if self.enable_chat else None)
+        win.on_fortune_manage = self._slot_wrap(self.open_fortune_profiles)
         win.on_user_interaction = self._slot_wrap(self.shell.divination_hint_on_interaction)
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._slot_wrap(self._notify_pet_hidden)
@@ -843,6 +846,74 @@ class PetInstance:
             self.open_legacy_chat()
         else:
             self.open_modern_chat()
+
+    def open_chat_with_message(self, text: str) -> None:
+        """打开当前聊天窗，并把这句话交给正在用的对话模型。"""
+        text = str(text or "").strip()
+        if not text or not self.enable_chat:
+            return
+        self._pending_chat_message = text
+        self.open_chat()
+        QTimer.singleShot(80, self._deliver_pending_chat_message)
+
+    def _chat_window_ready(self):
+        win = getattr(self, "chat_window", None)
+        if win is None or not shiboken6.isValid(win):
+            return None
+        return win
+
+    def _deliver_pending_chat_message(self, attempt: int = 0) -> None:
+        """等菜单关掉、聊天窗建好、上一句说完，再送出算命请求。"""
+        text = str(getattr(self, "_pending_chat_message", "") or "")
+        if not text:
+            return
+        win = self._chat_window_ready()
+        if attempt > 80:
+            self._pending_chat_message = ""
+            editor = getattr(win, "input", None) if win is not None else None
+            if editor is not None:
+                editor.setPlainText(text)
+            return
+        service = getattr(win, "service", None) if win is not None else None
+        busy = service is not None and getattr(service, "busy", False)
+        if QApplication.activePopupWidget() is not None or win is None or busy:
+            wait = 200 if busy else 60
+            QTimer.singleShot(wait, lambda: self._deliver_pending_chat_message(attempt + 1))
+            return
+        editor = getattr(win, "input", None)
+        send = getattr(win, "send_message", None)
+        if editor is None or not callable(send):
+            self._pending_chat_message = ""
+            return
+        self._pending_chat_message = ""
+        editor.setPlainText(text)
+        send()
+
+    def open_fortune_profiles(self) -> None:
+        """管理算命对象。菜单还开着时推迟到关闭后再弹，避免窗口被菜单会话吃掉。"""
+        from .fortune_dialog import FortuneProfilesDialog
+
+        if self._defer_while_popup_active("fortune-profiles", self.open_fortune_profiles):
+            return
+        dialog = getattr(self, "fortune_profiles_dialog", None)
+        if dialog is not None and not shiboken6.isValid(dialog):
+            dialog = None
+            self.fortune_profiles_dialog = None
+        if dialog is None:
+            parent = self.win if isinstance(self.win, QWidget) else None
+            dialog = FortuneProfilesDialog(self.config, parent)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dialog.destroyed.connect(
+                lambda *_args, owner=self, target=dialog:
+                    owner._fortune_profiles_destroyed(target))
+            self.fortune_profiles_dialog = dialog
+        else:
+            dialog.reload_from_config()
+        self._present_dialog(dialog)
+
+    def _fortune_profiles_destroyed(self, dialog) -> None:
+        if getattr(self, "fortune_profiles_dialog", None) is dialog:
+            self.fortune_profiles_dialog = None
 
     def open_quick_chat(self) -> None:
         """打开快速对话气泡；与完整聊天窗共用会话历史。"""

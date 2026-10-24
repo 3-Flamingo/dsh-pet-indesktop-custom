@@ -116,6 +116,16 @@ def test_grace_seconds_defaults_and_clamps():
     assert window_alerts.music_sing_grace_seconds(_FakeHost(grace=8)) == 8.0
 
 
+def test_music_mode_off_stops_singing_while_audio_plays(monkeypatch):
+    """右键「退出音乐模式」后，歌还在放也不能继续唱。"""
+    monkeypatch.setattr(music_detect, "is_music_playing", lambda: True)
+    host = _FakeHost()
+    host._music_lyric = type("Ctrl", (), {"_user_mode_off": True})()
+    host._music_sing_active = True
+    window_alerts.check_music_sing(host)
+    assert host._music_sing_active is False
+
+
 def test_disabled_switch_stops_immediately(monkeypatch):
     """关掉开关要立刻停，不受宽限期影响。"""
     monkeypatch.setattr(music_detect, "is_music_playing", lambda: True)

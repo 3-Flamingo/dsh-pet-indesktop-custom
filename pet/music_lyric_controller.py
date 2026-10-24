@@ -487,9 +487,43 @@ class MusicLyricController(QObject):
         if self._user_mode_off:
             self._timer.stop()
             self._reset()
-            self._set_instrumental_flag(False)
+            # 只停表的话，歌词气泡还要挂满剩余时长（最多 2 秒），唱歌轮询又只看
+            # 音频峰值、不看这个开关——歌还在放，桌宠就还在唱，菜单项像是点了没反应。
+            self._dismiss_lyric_bubble()
+            self._stop_singing_now()
         else:
             self.sync_enabled(True)
+
+    def _dismiss_lyric_bubble(self) -> None:
+        """退出音乐模式时立刻收起歌词气泡。提醒 / 粘滞气泡不是歌词，不能跟着收。"""
+        win = self.win
+        if getattr(win, "_alert_current", None) is not None:
+            return
+        if getattr(win, "_sticky_bubble_active", False):
+            return
+        bubble = getattr(win, "_speech_bubble", None)
+        closer = getattr(bubble, "dismiss", None)
+        if not callable(closer):
+            closer = getattr(bubble, "hide", None)
+        if not callable(closer):
+            return
+        try:
+            closer()
+        except Exception:
+            log.debug("退出音乐模式收起歌词气泡失败", exc_info=True)
+
+    def _stop_singing_now(self) -> None:
+        """退出音乐模式时立刻停掉唱歌动画。
+
+        下一拍由 ``window_alerts.check_music_sing`` 看到 ``_user_mode_off``
+        继续按住，避免音频还在就马上又唱起来。
+        """
+        win = self.win
+        try:
+            win._music_sing_active = False
+            win._music_sing_silent_since = None
+        except Exception:
+            log.debug("退出音乐模式停唱歌失败", exc_info=True)
 
     def music_mode_active(self) -> bool:
         """当前音乐模式是否在跑（供菜单勾选态显示）。"""

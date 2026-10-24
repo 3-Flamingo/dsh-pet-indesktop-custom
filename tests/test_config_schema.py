@@ -84,6 +84,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "facing",
         "ffmpeg_recycle_minutes",
         "first_frame_cache_max_mb",
+        "fortune_profiles",
         "game_fps_process",
         "game_fps_target_mode",
         "golden_spin_direct",

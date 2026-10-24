@@ -2410,6 +2410,29 @@ def test_stale_sample_after_disable_enable_does_not_clear_busy_gate(qapp, monkey
         ctrl.shutdown()
 
 
+def test_exit_music_mode_hides_lyric_and_stops_singing(qapp):
+    """退出音乐模式要立刻收起歌词、停掉唱歌，不能只停表等气泡自己超时。"""
+    from pet.music_lyric_controller import MusicLyricController
+
+    win = _FakeWinVisible()
+    bubble = type("Bubble", (), {"dismissed": False})()
+
+    def dismiss():
+        bubble.dismissed = True
+
+    bubble.dismiss = dismiss
+    win._speech_bubble = bubble
+    win._music_sing_active = True
+    ctrl = MusicLyricController(win)
+    try:
+        ctrl.set_music_mode_enabled(False)
+        assert ctrl._user_mode_off is True
+        assert bubble.dismissed is True
+        assert win._music_sing_active is False
+    finally:
+        ctrl.shutdown()
+
+
 def test_music_mode_reentry_after_inflight_sample_keeps_sampling(qapp, monkeypatch):
     """退出音乐模式再进入：在途那一拍不得把忙门留下永久闭着（F5 配套）。
 

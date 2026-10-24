@@ -10,6 +10,9 @@
 ``allow_netease=True`` 且 SMTC 没有在播会话时才作为补充源（见
 ``now_playing._read_netease_playback``）。
 
+**播放控制不在这里**。暂停 / 切歌走 ``now_playing.toggle_play_pause`` /
+``skip_track``：没有正在播放的 SMTC 会话时改发系统多媒体键。
+
 **窗口标题格式**：网易云主窗口标题实测就是 ``歌名 - 歌手``（例：
 ``无名(写给杨乃文的歌) - 张震岳``），切歌时随之变化；暂停时标题不变、也没有
 任何进度字段。所以：

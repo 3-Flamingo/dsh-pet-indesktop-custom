@@ -71,3 +71,43 @@ def test_unknown_peak_falls_back_to_playing(monkeypatch):
     _fake_titles(monkeypatch, ["晴天 - 周杰伦"])
     monkeypatch.setattr(music_detect, "audio_peak_level", lambda: None)
     assert now_playing._read_netease_playback() is not None
+
+
+def _no_smtc(monkeypatch, name):
+    """SMTC 传输返回 False（网易云不注册会话时的口径）。"""
+
+    async def _fail(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(now_playing, name, _fail)
+
+
+def test_play_pause_falls_back_to_media_key(monkeypatch):
+    """没有正在播放的 SMTC 会话时，暂停/播放必须改发系统多媒体键。"""
+    sent = []
+    _no_smtc(monkeypatch, "_play_pause_async")
+    monkeypatch.setattr(now_playing, "_send_media_key", lambda vk: sent.append(vk) or True)
+    assert now_playing.toggle_play_pause() is True
+    assert sent == [now_playing.VK_MEDIA_PLAY_PAUSE]
+
+
+def test_play_pause_keeps_smtc_when_a_session_is_playing(monkeypatch):
+    """已经有在播会话时只走 SMTC，不能再补一发多媒体键（会把刚切的状态切回去）。"""
+    sent = []
+
+    async def _ok():
+        return True
+
+    monkeypatch.setattr(now_playing, "_play_pause_async", _ok)
+    monkeypatch.setattr(now_playing, "_send_media_key", lambda vk: sent.append(vk) or True)
+    assert now_playing.toggle_play_pause() is True
+    assert sent == []
+
+
+def test_skip_falls_back_to_next_and_previous_keys(monkeypatch):
+    sent = []
+    _no_smtc(monkeypatch, "_skip_async")
+    monkeypatch.setattr(now_playing, "_send_media_key", lambda vk: sent.append(vk) or True)
+    assert now_playing.skip_track("next") is True
+    assert now_playing.skip_track("previous") is True
+    assert sent == [now_playing.VK_MEDIA_NEXT_TRACK, now_playing.VK_MEDIA_PREV_TRACK]

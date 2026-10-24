@@ -336,3 +336,37 @@ headless，本机两个发行名同版本并存、都提供 `cv2` 顶层模块�
   `scripts/export_android_assets.py::copy_notices`，2026-10-17 起）。
 - 手机使用的 WebP 动画与图标由第 2 节角色素材派生，继续保留其署名和
   个人非商业使用限制。工具与验收说明见 [Android 文档](docs/ANDROID.md)。
+
+## 10. bazi-skill（本机四柱排盘）
+
+- **Files**: `pet/bazi/pai_pan.py`（上游 `scripts/pai_pan.py`，算法未改）
+- **Origin**: [jinchenma94/bazi-skill](https://github.com/jinchenma94/bazi-skill)
+- **License**: MIT License
+- **Used by**: `pet/fortune.py`（右键「AI算命」的四柱。只在本机计算，不访问该仓库的网络服务）
+- 源码树另存一份许可正文：`pet/bazi/LICENSE`。本节随 `THIRD_PARTY_NOTICES.md` 打进桌面包。
+
+### MIT License Text
+
+```text
+MIT License
+
+Copyright (c) 2025 jinchenma94
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

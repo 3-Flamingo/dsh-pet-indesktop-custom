@@ -2,8 +2,13 @@
 """读取系统当前正在播放的曲目与播放进度（Windows）。
 
 数据来源是 Windows 的 SMTC（System Media Transport Controls）——播放器主动
-向系统上报的会话信息。网易云、QQ 音乐、Spotify、酷狗等接入 SMTC 的播放器
-都会出现在同一份会话列表里，因此本模块无需为单个播放器做适配。
+向系统上报的会话信息。QQ 音乐、Spotify、酷狗等接入 SMTC 的播放器都会出现在
+同一份会话列表里。
+
+网易云音乐 3.x **不注册 SMTC**（2026-10 实测，在播时会话列表里也没有它）。
+曲目读取另走窗口标题（``pet/netease_playing.py``）。菜单里的暂停 / 切歌在
+没有「正在播放」的 SMTC 会话时改发系统多媒体键（``VK_MEDIA_*``）——网易云
+会响应这组键，窗口消息 ``WM_APPCOMMAND`` 则实测无效。
 
 两个关键差异（实机实测，2026-09）：
 
@@ -20,7 +25,7 @@
 ``app_id`` 是 :data:`foobar_playing.FOOBAR_APP_ID`，调用方据此不拿它覆盖 SMTC 的
 跟踪位。
 
-本模块只读系统信息，不发起任何网络请求，也不触碰音频流。
+读取路径不发起网络请求，也不触碰音频流。暂停 / 切歌是另一条显式入口。
 """
 
 from __future__ import annotations
@@ -569,8 +574,35 @@ async def _pick_playback_session(tracked_app_id: str | None = None):
     return await _pick_playing_session(manager, tracked_app_id)
 
 
+# 系统多媒体键。网易云 3.x 不进 SMTC，但会吃这组键（2026-10-24 实测：
+# keybd_event 能暂停、切歌，再发一次能回到原来的状态；发给主窗口的
+# WM_APPCOMMAND 则完全无效）。
+VK_MEDIA_NEXT_TRACK = 0xB0
+VK_MEDIA_PREV_TRACK = 0xB1
+VK_MEDIA_PLAY_PAUSE = 0xB3
+_KEYEVENTF_KEYUP = 0x0002
+
+
+async def _playing_control_session():
+    """传输控制只认**正在播放**的 SMTC 会话。
+
+    没有在播会话时，:func:`_pick_playing_session` 会退回列表里的第一个
+    （本机实测经常是浏览器留下的待机会话），甚至一个会话都没有。对那种会话
+    发暂停 / 切歌，网易云不会有任何反应，浏览器却可能被误操作。返回 None，
+    调用方改发系统多媒体键。
+    """
+    manager_cls = _import_winrt()
+    if manager_cls is None:
+        return None
+    manager = await manager_cls.request_async()
+    for session in manager.get_sessions():
+        if _session_status(session) == 4:  # PLAYING
+            return session
+    return None
+
+
 async def _skip_async(to_previous: bool) -> bool:
-    session = await _pick_playback_session()
+    session = await _playing_control_session()
     if session is None:
         return False
     # 先看播放器是否真的声明支持切歌：方法存在不代表允许（比如网络电台）。
@@ -582,6 +614,33 @@ async def _skip_async(to_previous: bool) -> bool:
         session.try_skip_previous_async if to_previous else session.try_skip_next_async
     )
     return bool(await method())
+
+
+def _send_media_key(virtual_key: int) -> bool:
+    """发送一次系统多媒体键（按下再松开）。失败返回 False，绝不抛。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.keybd_event.argtypes = [
+            ctypes.c_ubyte, ctypes.c_ubyte, wintypes.DWORD, ctypes.c_ulong,
+        ]
+        user32.keybd_event.restype = None
+        code = int(virtual_key) & 0xFF
+        user32.keybd_event(code, 0, 0, 0)
+        user32.keybd_event(code, 0, _KEYEVENTF_KEYUP, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _media_key_for(direction: str) -> int:
+    if direction == "previous":
+        return VK_MEDIA_PREV_TRACK
+    return VK_MEDIA_NEXT_TRACK
 
 
 _LOOP_LOCAL = threading.local()
@@ -607,32 +666,41 @@ def _run_sync(coro):
 def skip_track(direction: str = "next") -> bool:
     """切换到下一首/上一首（``direction`` 为 ``"next"`` 或 ``"previous"``）。
 
-    返回是否成功；不支持切歌的播放器、或没有会话时返回 ``False``。
-    与 :func:`get_now_playing` 一样绝不抛异常。
+    有正在播放的 SMTC 会话时走会话命令；否则发系统多媒体键（网易云 3.x
+    不注册 SMTC，只认这组键）。返回是否成功。绝不抛异常。
     """
     if sys.platform != "win32":
         return False
     try:
-        return _run_sync(_skip_async(direction == "previous"))
+        if _run_sync(_skip_async(direction == "previous")):
+            return True
     except Exception:
-        return False
+        pass
+    return _send_media_key(_media_key_for(direction))
 
 
 async def _play_pause_async() -> bool:
-    session = await _pick_playback_session()
+    session = await _playing_control_session()
     if session is None:
         return False
     return bool(await session.try_toggle_play_pause_async())
 
 
 def toggle_play_pause() -> bool:
-    """暂停/恢复当前播放器。返回是否成功（无会话或不支持时为 False）。"""
+    """暂停/恢复当前播放器。
+
+    有正在播放的 SMTC 会话时切换那个会话；否则发系统多媒体键。网易云 3.x
+    属于后者——会话列表里根本没有它，只发 SMTC 命令会表现为点击没反应。
+    返回是否成功。绝不抛异常。
+    """
     if sys.platform != "win32":
         return False
     try:
-        return _run_sync(_play_pause_async())
+        if _run_sync(_play_pause_async()):
+            return True
     except Exception:
-        return False
+        pass
+    return _send_media_key(VK_MEDIA_PLAY_PAUSE)
 
 
 async def _play_session_async(exe_name: str) -> bool:

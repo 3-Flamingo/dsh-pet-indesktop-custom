@@ -775,6 +775,41 @@ class TestRealFileTailEndToEnd:
 
         mon.stop()
 
+    def test_cursor_nested_transcript_is_tailed_subagents_are_not(self, tmp_path):
+        """现行布局是 agent-transcripts/<会话id>/<会话id>.jsonl。
+
+        只扫 ``agent-transcripts/*.jsonl`` 时这个文件匹配不到，勾上联动也没有任何
+        状态。子代理记录在更深的 subagents/ 里，不能跟着报。
+        """
+        QApplication.instance() or QApplication([])
+
+        session = "d56d8710-afcc-4693-91b3-bb7284c96dd0"
+        root = tmp_path / ".cursor" / "projects" / "proj" / "agent-transcripts"
+        transcript = root / session / f"{session}.jsonl"
+        subagent = root / session / "subagents" / "child.jsonl"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        subagent.parent.mkdir(parents=True, exist_ok=True)
+        transcript.touch()
+        subagent.touch()
+
+        received_states = []
+        mon = CursorMonitor(tmp_path / "cfg", base_dir=tmp_path / ".cursor" / "projects")
+        mon.state_changed.connect(lambda k, s: received_states.append((k, s)))
+        mon.start()
+        mon._poll()
+
+        line = json.dumps({"role": "user", "message": {"content": [{"type": "text", "text": "hi"}]}})
+        transcript.write_text(line + "\n", encoding="utf-8")
+        subagent.write_text(
+            json.dumps({"type": "PreToolUse"}) + "\n", encoding="utf-8",
+        )
+        mon._poll()
+
+        assert received_states == [("cursor", "thinking")]
+        assert str(subagent) not in mon._tailers
+        assert str(transcript) in mon._tailers
+        mon.stop()
+
     def test_agent_state_triggers_pet_action(self, tmp_path):
         app = QApplication.instance() or QApplication([])
 

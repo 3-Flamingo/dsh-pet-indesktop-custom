@@ -847,6 +847,13 @@ def check_music_sing(host) -> None:
         host._music_sing_active = False
         host._music_sing_silent_since = None
         return
+    # 右键「退出音乐模式」只停歌词表，唱歌轮询是另一条线。不在这里按住的话，
+    # 歌还在放，桌宠就还在唱，菜单项看起来没有生效。
+    controller = getattr(host, "_music_lyric", None)
+    if getattr(controller, "_user_mode_off", False):
+        host._music_sing_active = False
+        host._music_sing_silent_since = None
+        return
     # 当前是纯音乐（配乐/OST/演奏曲）：没有可唱的句子，不唱歌。
     # 标志由歌词控制器维护；没启用歌词功能时该标志恒为 False，不受影响。
     if getattr(host, "_instrumental_playing", False):

@@ -122,7 +122,8 @@ if (-not $SkipTests) {
         'tests/test_weather.py',
         'tests/test_weather_fallback.py',
         'tests/test_context_menu_lifecycle.py',
-        'tests/test_sprite_menu.py'
+        'tests/test_sprite_menu.py',
+        'tests/test_fortune.py'
     )
     $py = Run-External -Exe $Python -Arguments (@('-m', 'pytest', '-q') + $focus)
     if ($py.Code -ne 0) { Fail 1 ('聚焦测试未通过：' + ($py.Lines -join [Environment]::NewLine)) }

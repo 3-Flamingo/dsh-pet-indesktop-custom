@@ -1213,6 +1213,7 @@ class Config:
             "chat_bg_crops": {},  # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
             "character_aliases": {},  # 角色显示名别名 {角色id: 自定义名}，空名=恢复默认
             "character_profiles": {},  # 角色档案：{角色id: {click_talk_bindings: {动画id: [台词]}}}
+            "fortune_profiles": [],  # AI算命对象：[{id,name,sex,calendar,date,leap,shichen,place}]
             "chat_always_on_top": False,  # 聊天窗置顶
             "dynamic_island": _default_dynamic_island_data(),
             # —— 灵动岛附加指标（P1 Slice C）——
@@ -1596,6 +1597,7 @@ class Config:
             "weather_city_codes",
             "character_aliases",
             "character_profiles",
+            "fortune_profiles",
             "chat_always_on_top",
             "dynamic_island",
             "island_metrics",
@@ -1950,6 +1952,9 @@ class Config:
         ui_style = str(self.data.get("chat_ui_style") or "")
         self.data["chat_ui_style"] = ui_style if ui_style in {"modern", "classic"} else "modern"
         self.data["character_profiles"] = _clean_character_profiles(self.data.get("character_profiles"))
+        from .fortune import clean_fortune_profiles
+
+        self.data["fortune_profiles"] = clean_fortune_profiles(self.data.get("fortune_profiles"))
         self.data["chat_always_on_top"] = bool(self.data.get("chat_always_on_top", False))
         self.data["dynamic_island"] = _clean_dynamic_island_data(self.data.get("dynamic_island"))
         # 网络信息（issue #172）三键：布尔同规防字符串布尔误开；探测间隔走
@@ -2241,6 +2246,7 @@ class Config:
             "mem_skip_foreground",
             "mem_min_size_mb",
             "character_profiles",
+            "fortune_profiles",
             "chat_always_on_top",
             "dynamic_island",
             "weather_enabled",

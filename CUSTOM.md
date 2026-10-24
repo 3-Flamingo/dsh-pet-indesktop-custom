@@ -1,7 +1,7 @@
 # dsh-pet-indesktop-custom
 
 基于上游 [**MerZlin/dsh-pet-indesktop**](https://github.com/MerZlin/dsh-pet-indesktop) **v4.3.4**（MIT）的本地修复版。
-只动了两个缺陷，其余保持上游原样；修复都带回归测试。
+本地修复和功能都带回归测试。
 
 ## 相对上游的改动
 
@@ -11,6 +11,9 @@
 | `fix(weather)` | 中国天气网街道级 12 位码失效导致「返回数据无效」；镇级标签在 open-meteo 查不到 |
 | `test(menu)` | 菜单外部点击看门狗的回归用例 |
 | `fix(lyrics)` | 网易云音乐不注册 SMTC 导致歌词永远不出现、「歌词对齐」恒灰：新增窗口标题兜底源 |
+| `fix(music-controls)` | 网易云不注册 SMTC，暂停/切歌/上一首点了没反应：没有在播会话时改发系统多媒体键；退出音乐模式立刻收起歌词并停唱 |
+| `fix(cursor-link)` | Cursor 会话记录改到 `agent-transcripts/<id>/<id>.jsonl`，旧 glob 一个文件都匹配不到，联动勾上也不汇报 |
+| `feat(fortune)` | 右键「AI算命」：多人档案、本机四柱、结果走桌宠当前的对话模型 |
 
 ### 1. 菜单：点外部收起
 
@@ -39,6 +42,23 @@
 **成因 B**：open-meteo 只拿标签前半段（马桥镇）去 GeoNames，镇名查不到就整源失败。
 
 **修法 B**：`open_meteo_query_names()` 按 基础名 → 标签两侧（上海）→ 全串 逐个试。
+
+### 3. 网易云播放控制
+
+**成因**：菜单「暂停 / 切歌 / 上一首」只对 SMTC 会话发命令。网易云 3.x 不注册会话，
+命令发到空列表（或浏览器留下的待机会话）上，听感就是点击没反应。发给主窗口的
+``WM_APPCOMMAND`` 实测同样无效。
+
+**修法**：没有**正在播放**的 SMTC 会话时，``toggle_play_pause`` / ``skip_track``
+改发 ``VK_MEDIA_PLAY_PAUSE`` / ``VK_MEDIA_NEXT_TRACK`` / ``VK_MEDIA_PREV_TRACK``。
+「退出音乐模式」额外立刻收起歌词气泡，并让唱歌轮询在 ``_user_mode_off`` 期间停住。
+
+### 4. AI 算命
+
+右键「AI算命」→ 选人 → 每日运势 / 情感 / 财运 / 事业 / 健康。人选存在主配置
+`fortune_profiles`，可以有多个。四柱用本机的 `pet/bazi/pai_pan.py`
+（[bazi-skill](https://github.com/jinchenma94/bazi-skill)，MIT），不算真太阳时。
+解读不另接服务，打开现有聊天窗，用当前对话模型和 API key。
 
 ## 本地重建脚本
 
