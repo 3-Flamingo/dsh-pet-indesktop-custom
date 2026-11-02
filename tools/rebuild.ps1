@@ -159,7 +159,15 @@ Start-Sleep -Milliseconds 500
 Step '[4/5] 换部署目录'
 $Backup = "$DeployTo.bak"
 if (Test-Path $Backup) { Remove-Item $Backup -Recurse -Force }
-if (Test-Path $DeployTo) { Move-Item $DeployTo $Backup }
+if (Test-Path $DeployTo) {
+    # 整目录 Move 会因"还有句柄"失败（实测 2026-11-02：旧实例刚被 stop-process，
+    # 目录仍被 explorer / 杀软 / 上一轮留下的句柄占着，Move-Item 抛 IOException）。
+    # 改成"先复制成备份、再原地覆盖"：两步都不需要重命名，不依赖目录锁。
+    $backupCopy = Run-External -Exe 'robocopy' -Arguments @(
+        $DeployTo, $Backup, '/E', '/MT:16', '/NFL', '/NDL', '/NJH', '/NJS', '/NP'
+    )
+    if ($backupCopy.Code -ge 8) { Fail 3 "备份上一代失败（robocopy=$($backupCopy.Code)）" }
+}
 $copy = Run-External -Exe 'robocopy' -Arguments @(
     $Dist, $DeployTo, '/E', '/MT:16', '/NFL', '/NDL', '/NJH', '/NJS', '/NP'
 )

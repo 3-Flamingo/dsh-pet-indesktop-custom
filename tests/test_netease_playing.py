@@ -37,6 +37,41 @@ def test_title_without_separator_is_unusable():
     assert netease_playing.parse_window_title(" - 歌手") is None
 
 
+@pytest.mark.parametrize(
+    "title",
+    [
+        "全部 - 季然/听潮阁",          # 歌单页：2026-11-02 实测，格式与曲目完全一样
+        "VIP 专享 - 某平台",
+        "歌单 - 我的",
+        "新建标签页 - Microsoft Edge",
+        "New Tab - Google Chrome",
+        "设置 - 网易云音乐",
+        "哔哩哔哩 - 某UP",
+    ],
+)
+def test_page_titles_are_not_mistaken_for_tracks(title):
+    """标题像 ``歌名 - 歌手`` 但不是"正在播放的歌" → 一律不认。
+
+    网易云没在放歌时窗口标题会变成页面名/弹窗标题（歌单页「全部」、VIP 促销、
+    浏览器标签页……），切分照样成功；若照单全收，就会拿它去搜歌词（白发请求），
+    并且让「歌词对齐」时有时无。这是「时好时坏」的真实成因。
+    """
+    assert netease_playing.parse_window_title(title) is None
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        ("M字额 - 张敬轩", ("M字额", "张敬轩")),
+        ("全部的爱 - 某歌手", ("全部的爱", "某歌手")),
+        ("音乐节派对 - 某乐队", ("音乐节派对", "某乐队")),
+    ],
+)
+def test_real_tracks_still_pass(title, expected):
+    """否决不能误伤真歌名：只否决"整段等于页面名/含界面字样"的标题。"""
+    assert netease_playing.parse_window_title(title) == expected
+
+
 def test_netease_returns_none_without_windows(monkeypatch):
     _fake_titles(monkeypatch, [])
     assert netease_playing.read_track() is None

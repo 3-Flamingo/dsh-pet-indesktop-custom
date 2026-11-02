@@ -26,6 +26,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from . import foobar_playing
 
 NETEASE_EXE = "cloudmusic.exe"
@@ -37,10 +39,32 @@ NETEASE_APP_ID = NETEASE_EXE
 _TITLE_SEPARATOR = " - "
 
 
+#: 标题里出现就**不是正在播放的歌**的界面文案。网易云在"没在放歌"时主窗口标题
+#: 落在这些页面/弹窗上（歌单、我的音乐、搜索、弹层……），而标题格式又与曲目
+#: 完全一样（``全部 - 季然/听潮阁`` 看着就像一首歌），2026-11-02 实测就是这么
+#: 被当成曲目、拿标题去搜歌词搜不到，整条链路看起来"时好时坏"。
+_NOT_PLAYING_RE = re.compile(
+    r"(VIP|会员|专享|试听|已购买|付费|特权|高品质|无损|杜比|车载|"
+    r"^全部$|^音乐$|^我的$|^收藏$|^歌单$|^推荐$|^每日$|^私人$|^心动$|"
+    r"^发现$|^搜索$|^排行榜$|^下载$|^直播$|^播客$|^听书$|"
+    r"^新建标签页$|^新标签页$|^New Tab$|"
+    r"Settings|设置|关于|登录|注册)",
+    re.I,
+)
+#: 浏览器类标题（含站点名）也一律不认：那是浏览器窗口，不是播放器曲目。
+_SITE_NOISE_RE = re.compile(
+    r"(Microsoft\u200b?\s*Edge|Google\s*Chrome|Mozilla\s*Firefox|哔哩哔哩|bilibili)", re.I
+)
+
+
 def parse_window_title(window_title: str) -> tuple[str, str] | None:
-    """``歌名 - 歌手`` → ``(歌名, 歌手)``；切不出两边时返回 ``None``。
+    """``歌名 - 歌手`` → ``(歌名, 歌手)``；切不出两边、或不像正在播放的歌时返回 ``None``。
 
     按**最后一个**分隔符切：``"A - B - C"`` 里 C 是歌手，A - B 是歌名。
+
+    为什么要否决而非只切分：网易云没在放歌时标题会变成页面名（``全部 - 季然/听潮阁``、
+    ``VIP 专享``、``新建标签页``…），切分照样成功，但拿它去搜歌词就是白发一次
+    请求、并且把"上一首"或垃圾标题当成当前曲目。
     """
     text = str(window_title or "").strip()
     if not text:
@@ -51,6 +75,10 @@ def parse_window_title(window_title: str) -> tuple[str, str] | None:
     title = text[:index].strip()
     artist = text[index + len(_TITLE_SEPARATOR):].strip()
     if not title or not artist:
+        return None
+    if _SITE_NOISE_RE.search(text):
+        return None
+    if _NOT_PLAYING_RE.search(title) or _NOT_PLAYING_RE.search(artist):
         return None
     return title, artist
 
