@@ -48,6 +48,20 @@ POLL_MS = 1000
 # 弹窗至少完整显示 5 秒。占位期间不断续期，弹窗消失后再等满这个时长才恢复。
 LYRIC_YIELD_SECONDS = 5.0
 
+# ---------------------------------------------------------------- 卡死自愈看门狗
+# 歌词链路"卡一次就永久不更新、直到重启桌宠"的成因一直是逐个发现、逐个修的
+# （采样忙门卡死、采样线程退出后无人重建、令牌错代……）。与其继续猜下一个
+# 成因，不如加一条与成因无关的兜底：
+#   - 正常时每一拍（1s）都会走到 _heartbeat()，时间戳一直新鲜，看门狗只是读
+#     一个 float，开销可忽略；
+#   - 一旦连续 STALL_REVIVE_SECONDS 秒没有任何一拍走完（而且开关开着、窗口
+#     可见），就原地重置整条链路并按当前配置重新启用——表现是"最多卡 20 秒"，
+#     而不是"要重启"。
+# WATCHDOG_INTERVAL_MS：检查频率。放在 5s 而不是 1s——它要发现的是"几十秒
+# 级别的停摆"，5s 的检测延迟完全可以接受，还省掉 4/5 的检查次数。
+WATCHDOG_INTERVAL_MS = 5000
+STALL_REVIVE_SECONDS = 20.0
+
 # 标题与歌词的合成格式：第一行常驻歌名，第二行起是当前歌词。
 # 气泡最多 3 行、不触发分页，所以标题不会被拆到另一页去。
 NOW_SINGING_TEMPLATE = "我在唱《{title}》"
@@ -332,6 +346,14 @@ class MusicLyricController(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
         self._timer.timeout.connect(self._on_tick)
+        # 看门狗：启用了却连续 STALL_REVIVE_SECONDS 秒没有任何一拍走完 → 原地复活。
+        # 目的是把"歌词卡住"从"要重启桌宠"降级成"最多卡 20 秒自己回来"，
+        # 不再依赖我们去逐一猜成因（见 _revive 的说明）。
+        self._last_progress_at = time.monotonic()
+        self._watchdog = QTimer(self)
+        self._watchdog.setInterval(WATCHDOG_INTERVAL_MS)
+        self._watchdog.timeout.connect(self._watchdog_check)
+        self._watchdog.start()
         self._tracker = LyricTracker()
 
         # 采样在途标志：后台线程还在跑就不再派发新的，避免堆积。
@@ -410,6 +432,9 @@ class MusicLyricController(QObject):
         if on and getattr(self, "_user_mode_off", False):
             return
         if on:
+            # 重新启用即视为"新的开始"：看门狗从此刻重新计时，不把停用期间的
+            # 空白算成陈旧（否则一启用就可能立刻触发一次无谓的复活）。
+            self._last_progress_at = time.monotonic()
             self._start_sample_thread()
             self._timer.start()
             self._on_tick()
@@ -466,8 +491,56 @@ class MusicLyricController(QObject):
         进度基准同样不推进，所以"停表"与"继续空转"的观感完全一致，而复位会
         顺带清掉纯音乐标志（``_reset`` 清它是给"关掉功能"用的，见那里的说明），
         桌宠恢复显示后就可能对着纯音乐唱起来。
+
+        **不推进 ``_last_progress_at``**：隐藏期间"没有更新"是预期状态，
+        让心跳在恢复显示时从零重新计时，隐藏再久也不会一显示就触发看门狗。
         """
         self._timer.stop()
+
+    def _heartbeat(self) -> None:
+        """记录"链路还活着"的时刻（任何一次 tick 走到处理逻辑都算）。
+
+        看门狗（:meth:`_watchdog_check`）只认这个时间戳，不看具体状态——
+        它要回答的问题是"下一拍还会不会自己回来"，而不是"现在有没有歌词"。
+        """
+        self._last_progress_at = time.monotonic()
+
+    def _revive(self, reason: str) -> None:
+        """原地重新起搏：把可能卡住的采样/轮询复位到"刚启用"的样子。
+
+        为什么需要它：歌词链路曾有"卡一次就永久不更新"的多种成因（采样忙门
+        卡在 True、线程退出后没人重建、``_user_mode_off`` 残留、令牌不匹配导致
+        结果全被丢弃……）。这些成因已经逐个修过，但每修一个都是"猜下一个 bug
+        在哪"。这里改为**不看成因**：只要还开着、窗口可见、却连续
+        ``STALL_REVIVE_SECONDS`` 秒没有任何一拍走完，就无条件重置整条链。
+
+        幂等且便宜：重置后 ``sync_enabled(True)`` 会立刻派发下一拍，正常情况
+        下永远不会走到这里。
+        """
+        log.warning("歌词链路停在 %.0f 秒没有任何更新（%s），自动重新起搏",
+                    STALL_REVIVE_SECONDS, reason)
+        self._user_mode_off = False
+        self._timer.stop()
+        self._stop_sample_thread()
+        self._reset()
+        self.sync_enabled(True)
+
+    def _watchdog_check(self) -> None:
+        """定时器回调：启用了却长时间没有任何一拍 → 原地复活。
+
+        只在"本应工作"的条件下动手（开关开、窗口可见、控制器应该活着）；
+        其它情况更新时间戳，避免停用期间积累"陈旧"而在重新启用瞬间误触发。
+        """
+        now = time.monotonic()
+        if not self._timer.isActive() or not self._enabled():
+            self._last_progress_at = now
+            return
+        if not getattr(self.win, "isVisible", lambda: False)():
+            self._last_progress_at = now
+            return
+        if now - self._last_progress_at < STALL_REVIVE_SECONDS:
+            return
+        self._revive("定时器在跑但没有下文")
 
     def shutdown(self) -> None:
         """窗口关闭 / 会话结束：停表并复位（不可恢复的收口）。"""
@@ -529,7 +602,14 @@ class MusicLyricController(QObject):
         """当前音乐模式是否在跑（供菜单勾选态显示）。"""
         if getattr(self, "_user_mode_off", False):
             return False
-        return bool(self.win.cfg.get("music_lyric_enabled", False))
+        return self._enabled()
+
+    def _enabled(self) -> bool:
+        """设置页开关（配置缺失/脏值一律按关）。看门狗用它判断"本应工作"。"""
+        try:
+            return bool(self.win.cfg.get("music_lyric_enabled", False))
+        except Exception:
+            return False
 
     def skip_track(self, direction: str = "next") -> bool:
         """菜单「切歌」：切到下一首/上一首。
@@ -681,6 +761,9 @@ class MusicLyricController(QObject):
         （窗口未响应）。所以这里起后台线程采样，结果经 _playback_ready
         回主线程处理。
         """
+        # 心跳放在所有早退之前：只要定时器还在跳，就说明链路活着（"上一拍还在
+        # 采样中"是正常节奏，不是卡死）。看门狗只看这个时间戳。
+        self._heartbeat()
         if not getattr(self.win, "isVisible", lambda: False)():
             return
         if self._sampling or self._sample_thread is None:
@@ -822,6 +905,9 @@ class MusicLyricController(QObject):
             return
         self._inflight_token = None
         self._sampling = False
+        # 结果回来了就是活着（哪怕 playback 为 None：那是"没在播"这个正常结论，
+        # 不是卡死）。看门狗据此区分"没有内容"和"停在半路"。
+        self._heartbeat()
         if not getattr(self.win, "isVisible", lambda: False)():
             return
         if playback is None:
