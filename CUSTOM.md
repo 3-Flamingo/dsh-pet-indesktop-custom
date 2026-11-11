@@ -16,6 +16,7 @@
 | `fix(music-controls)` | 网易云不注册 SMTC，暂停/切歌/上一首点了没反应：没有在播会话时改发系统多媒体键；退出音乐模式立刻收起歌词并停唱 |
 | `fix(cursor-link)` | Cursor 会话记录改到 `agent-transcripts/<id>/<id>.jsonl`，旧 glob 一个文件都匹配不到，联动勾上也不汇报 |
 | `feat(fortune)` | 右键「AI算命」：多人档案、本机四柱、结果走桌宠当前的对话模型 |
+| `fix(slot-recovery)` | 断电后槽档案变成一坨空格，槽就永久作废、连「生成 / 恢复」都只报错；现在会备份后按旧几何重建 |
 
 ### 1. 菜单：点外部收起
 
@@ -61,6 +62,21 @@
 `fortune_profiles`，可以有多个。四柱用本机的 `pet/bazi/pai_pan.py`
 （[bazi-skill](https://github.com/jinchenma94/bazi-skill)，MIT），不算真太阳时。
 解读不另接服务，打开现有聊天窗，用当前对话模型和 API key。
+
+### 5. 槽档案损坏后的自愈
+
+**成因**：意外断电时，`config-slot-<n>.json` 会变成「长度对、内容全是空格」的文件。
+`pet_profiles.read_slot_snapshot` 把它判成 `corrupt`，而 `_build_slot_sprite` 对任何
+非 `ok` 快照直接 `raise RuntimeError`——于是「生小肥鱼」「生成 / 恢复 slot0」都只弹一句
+「档案不可信」然后放弃，用户唯一的出路是手动删文件。上游的设计是「坏档案一个字节都不写」，
+安全，但没有恢复路径。
+
+**修法**：`_rebuild_broken_slot_profile()` 只在**档案本身**不可信（`corrupt` /
+`not-object` / `unreadable`）时接管：先用 `write_profile_settings(..., on_broken="backup-overwrite")`
+把原件备份成 `<file>.corrupt-<毫秒>-<pid>`，再以主配置的 `rx/ry/scale/facing/screen_name`
+为种子重建（重启后位置不丢），最后重读快照继续走原有的 spawn 流程。
+代次文件坏、或档案锁拿不到时**不重建**——那说明是别的故障，不能拿一份好配置把它盖住。
+`read_slot_snapshot` 本身仍保持严格，降级只发生在显式重建路径上。
 
 ## 本地重建脚本
 
@@ -115,7 +131,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Sk
 ## 已验证
 
 - `ruff check pet tests` 通过；
+- `pytest tests` 全量 **8441 passed / 17 skipped**（约 24 分钟）；
 - `pytest tests/test_menu_dismiss.py tests/test_weather.py tests/test_weather_fallback.py tests/test_context_menu_lifecycle.py tests/test_sprite_menu.py` = 106 passed；
+- `pytest tests/test_slot_corrupt_recovery.py` = 2 passed（把档案覆写成一坨空格，模拟断电后的真实损坏）；
 - 真机（Windows 10，1920×1080 + 副屏）：右键弹菜单 → 点 DSH 窗口 → 菜单立即收起；天气取数返回「闵行 多云 22.1℃」。
 
 ## 许可

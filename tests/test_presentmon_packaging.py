@@ -124,6 +124,9 @@ class TestShippedResource:
 
         notices = NOTICES.read_text(encoding="utf-8")
         section = notices.split("## 6. PresentMon", 1)[1]
+        # 只取本节：后面的节（例如 ## 10. bazi-skill）也带 ```text``` 许可块，
+        # 不收口就会把别家的许可当成本节的正文（2026-10-24 加了 AI算命后踩到）。
+        section = section.split("\n## ", 1)[0]
         blocks = re.findall(r"```text\n(.*?)```\n", section, re.S)
         assert blocks, "通知文件里没有许可正文代码块"
         assert blocks[-1].strip("\n") == LICENSE_FILE.read_text(

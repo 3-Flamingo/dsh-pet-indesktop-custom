@@ -5581,6 +5581,43 @@ class OverlayShell(QObject):
                 self._shutdown_library(lib, "failed-spawn")
             raise
 
+    def _rebuild_broken_slot_profile(self, config_dir, slot: int, snapshot) -> bool:
+        """档案不可信时按本宠几何重建（``slot0-corrupt`` 自愈的唯一入口）。
+
+        :func:`pet_profiles.read_slot_snapshot` 对"档案本身坏"与"代次文件坏"都报
+        ``corrupt``，所以别只认状态码——看它带来的 ``profile.status``：
+
+        - 档案在、内容不可信（``corrupt`` / ``not-object``）→ 备份重建，既安全
+          又有据可查；
+        - 档案只是不可读（``unreadable``：被占用/权限）→ 也允许，与
+          :func:`pet_profiles.write_profile_settings` 的 ``backup-overwrite`` 同口径；
+        - 档案**本身没问题**（代次文件坏了，或架构版本不认识）→ **不重建**，
+          否则会拿一份好配置去掩盖真正的故障；
+        - 锁拿不到（``write-timeout`` 等，``profile`` 为 None）→ 不重建。
+        """
+        from . import pet_profiles
+
+        if snapshot.status != "corrupt":
+            return False
+        profile = getattr(snapshot, "profile", None)
+        if profile is None or profile.status not in ("corrupt", "not-object", "unreadable"):
+            return False
+        seed: dict = {}
+        for key in ("rx", "ry", "scale", "facing", "screen_name"):
+            value = self._config.get(key)
+            if value is not None:
+                seed[key] = value
+        result = pet_profiles.write_profile_settings(
+            config_dir, slot, seed, on_broken="backup-overwrite")
+        if not result.ok:
+            logging.error("overlay: slot-%d 档案损坏，重建失败（%s）：%s → %s",
+                          slot, result.status, result.reason, result.path)
+            return False
+        logging.warning(
+            "overlay: slot-%d 档案不可信（%s），已备份到 %s 后按旧几何重建",
+            slot, snapshot.reason, result.backup_path)
+        return True
+
     def _build_slot_sprite(self, slot: int) -> None:
         """按 slot 身份建一只子肥鱼（spawn 与重启复活共用路径，不落清单）。
 
@@ -5588,6 +5625,8 @@ class OverlayShell(QObject):
         有记录 = 重启复活，按比例恢复上次位置、按它自己存的角色建库；无记录 =
         首次生成，自主宠向右错开（角色继承主配置）。spawn 后按该 slot 的配置
         下发设置，并建它自己的气泡/自言自语宿主（旧架构一窗一气泡一计时）。
+        档案**损坏**时先走 :meth:`_rebuild_broken_slot_profile` 重建，坏文件
+        只备份不改写——这一条让「生成 / 恢复 slot0」在断电事故后仍然可用。
         """
         from . import config_write_lock, pet_profiles
 
@@ -5597,7 +5636,15 @@ class OverlayShell(QObject):
             with config_write_lock.config_write_lock(config_dir):
                 snapshot = pet_profiles.read_slot_snapshot(config_dir, slot)
                 if snapshot.status != "ok":
-                    raise RuntimeError(f"slot-{slot}: {snapshot}")
+                    # 档案损坏（断电/蓝屏把缓冲区丢成空白页）时，这里过去直接抛错，
+                    # 于是「生成 / 恢复 slot0」「生小肥鱼」永远失败，用户只能去手改
+                    # JSON。建档是**显式重建入口**：先留取证备份、按本宠几何重建，
+                    # 坏文件一个字节都不丢（与活跃集合 `backup-overwrite` 同口径）。
+                    if not self._rebuild_broken_slot_profile(config_dir, slot, snapshot):
+                        raise RuntimeError(f"slot-{slot}: {snapshot}")
+                    snapshot = pet_profiles.read_slot_snapshot(config_dir, slot)
+                    if snapshot.status != "ok":
+                        raise RuntimeError(f"slot-{slot}: {snapshot}")
                 if not snapshot.profile.exists:
                     from .config import normalize_pet_profile_snapshot
 

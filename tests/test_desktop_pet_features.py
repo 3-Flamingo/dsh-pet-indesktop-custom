@@ -911,7 +911,9 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     if sys.platform == "win32":
         expected_labels.append("回收内存")  # 「回收内存」菜单动作（#210）：仅 Windows
     expected_labels.extend(["查看天气", "天气城市"])  # 天气入口（issue #209，所有平台）
-    expected_labels.append("抽支签")  # 每日一签（2026-10-15；设置入口在「互动 · 趣味」标签）
+    # 2026-10-24 起「AI算命」也在默认模板里（Cursor 的 adc897e 加了条目，
+    # 这里是默认菜单的**完整**清单，顺带把新条目钉住，免得下次再加就漏测）。
+    expected_labels.extend(["AI算命", "抽支签"])  # 抽支签=每日一签（2026-10-15；设置入口在「互动 · 趣味」标签）
     # 立即报时/语音报时开关/今日节日/节日提醒开关：2026-09-19 起默认模板
     # visible: false，不上默认菜单（用户可在菜单编辑器加回）
     expected_labels.extend([

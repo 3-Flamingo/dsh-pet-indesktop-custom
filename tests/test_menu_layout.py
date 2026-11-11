@@ -564,8 +564,9 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
         expected_root.insert(-2, "待办提醒")
         expected_root.insert(-2, "免打扰")
     # 天气两个入口在 tools 段末尾（待办提醒之后、桌宠设置之前）；
-    # 「抽支签」紧随其后（2026-10-15 新功能，tools 段最后一个，默认可见）
-    expected_root[-2:-2] = ["查看天气", "天气城市", "抽支签"]
+    # 「抽支签」紧随其后（2026-10-15 新功能，默认可见）；「AI算命」在它之前
+    # （2026-10-24 adc897e 加进默认模板，同属 tools 段）
+    expected_root[-2:-2] = ["查看天气", "天气城市", "AI算命", "抽支签"]
     # 报时/节日四项默认不在菜单上（模板 visible: false，2026-09-19 起）
     assert root == expected_root
     rendered = ["|" if action.isSeparator() else action.text() for action in menu.actions()]
@@ -579,13 +580,13 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     ]
     if sys.platform == "win32":
         expected_rendered.insert(-3, "主动识屏")
-    # tools 段顺序：… Agent 联动 [主动识屏] 待办提醒 免打扰 [回收内存] 查看天气 天气城市 抽支签 | 桌宠设置 退出
+    # tools 段顺序：… Agent 联动 [主动识屏] 待办提醒 免打扰 [回收内存] 查看天气 天气城市 AI算命 抽支签 | 桌宠设置 退出
     # （报时/节日四项默认 visible: false，不渲染；回收内存仅在 Windows 出现）
     expected_rendered.insert(-3, "待办提醒")
     expected_rendered.insert(-3, "免打扰")
     if sys.platform == "win32":
         expected_rendered.insert(-3, "回收内存")
-    expected_rendered[-3:-3] = ["查看天气", "天气城市", "抽支签"]
+    expected_rendered[-3:-3] = ["查看天气", "天气城市", "AI算命", "抽支签"]
     assert rendered == expected_rendered
     pet_controls = next(action.menu() for action in menu.actions() if action.text() == "桌宠控制")
     assert [action.text() for action in pet_controls.actions() if not action.isSeparator()] == [

@@ -566,35 +566,35 @@ def test_spawn_over_a_corrupt_slot0_is_visible_and_keeps_children(tmp_path):
 
     终审链条：启动降级后 ``_remembered_active`` 不含 0 → 分配器仍按**最小非活跃槽**
     回到 0（这是用户的明确取舍：不静默跳号、不改分配语义）→ ``_build_slot_sprite(0)``
-    读坏档案抛错 → 旧实现只有一条 ``logging.exception``。用户眼里就是"点了没反应"，
-    而且**每次点都一样**（正是 B01 要消灭的那类失败）。
+    读坏档案。旧实现直接抛错、只有一条 ``logging.exception``（用户眼里就是"点了没
+    反应"），2026-10-10 补了可见反馈；**2026-11-11 起**这一条改走自愈：生成是显式
+    重建入口，坏档案先备份再按旧几何重建（见 ``tests/test_slot_corrupt_recovery.py``）。
 
-    本用例钉住：失败必须带**路径**可见、健康子不受牵连、活跃集合不被改写、坏档案
-    一个字节不动；档案修好后再生成照常恢复 slot0。
+    本用例守住的底线：坏档案**一个字节都不丢**（备份与原文件都在）、健康子不受牵连、
+    活跃集合按这次成功生成正常更新。
     """
     shell, directory, broken = _broken_slot0_shell(tmp_path, active=[0, 1])
     assert profiles.write_profile_settings(directory, 1, {'character': 'nova'}).status == 'ok'
     before = broken.read_bytes()
-    spoken: list = []
     try:
         (child,) = shell._spawned
         assert shell._spawned_slots[child] == 1
         shell.overlay.show()
-        shell._show_bubble_text = lambda text, duration_ms=0, **kw: (
-            spoken.append(str(text)), True)[1]
 
         shell.spawn_pet()                       # 目标仍是 slot0（不跳号）
 
-        assert spoken, '生成失败必须可见（旧实现只 logging.exception）'
-        assert str(broken) in spoken[0], '可见反馈必须点名坏档案路径'
-        assert 'slot-0' in spoken[0]
-        assert shell.sprite is None, '失败的 slot0 不许留下半只'
+        assert shell.sprite is not None, '坏档案从生成入口进入应被重建'
         assert shell._spawned == [child] and shell._spawned_slots[child] == 1, '健康子继续活'
-        assert shell._active_slots() == [1], '失败不改活跃集合'
-        assert broken.read_bytes() == before, '坏档案一个字节都不许动（不自动修复）'
+        assert shell._active_slots() == [0, 1]
+        backups = sorted(p for p in directory.iterdir()
+                         if p.name.startswith(broken.name + '.corrupt-'))
+        assert backups, '坏档案必须先备份'
+        assert backups[-1].read_bytes() == before, '坏档案内容原样进备份，一个字节不丢'
+        assert profiles.read_slot_snapshot(directory, 0).status == 'ok'
 
-        # 修好档案 → 同一进程里再次生成恢复 slot0（失败是可恢复的，不是死状态）
+        # 同一个进程里再生成一次（换成健康档案）也照常：失败不是死状态
         broken.write_text(json.dumps({"version": 4, "character": "nova"}), encoding='utf8')
+        shell.exit_pet(shell.sprite)
         shell.spawn_pet()
         assert shell.sprite is not None, '档案修好后生成必须恢复 slot0'
         assert shell._active_slots() == [0, 1]
@@ -607,7 +607,11 @@ def test_spawn_failure_reaches_the_recovery_window_when_no_pet_is_visible(tmp_pa
 
     无宠期（刚关掉最后一只 / 全隐藏）气泡没有落点，反馈只剩日志就等于又回到静默。
     恢复窗此时是唯一的可见入口，故失败说明要写进它，并且「打开配置目录」这条
-    "去修档案"的入口必须在（本批次不做自动修复，只给路）。
+    "去修档案"的入口必须在。
+
+    2026-11-11 起坏档案在生成入口自愈，所以这里用**自愈之后仍会失败**的那类故障
+    走同一条可见反馈通道（典型：磁盘写不进去 → 备份/重建失败），确保兜底叙事没有
+    随策略改动一起丢掉。
     """
     from PySide6.QtWidgets import QPushButton
 
@@ -615,7 +619,12 @@ def test_spawn_failure_reaches_the_recovery_window_when_no_pet_is_visible(tmp_pa
     try:
         assert shell.sprite is None and not shell._spawned
 
-        shell.spawn_pet()
+        original = shell._rebuild_broken_slot_profile
+        shell._rebuild_broken_slot_profile = lambda *a, **k: False
+        try:
+            shell.spawn_pet()
+        finally:
+            shell._rebuild_broken_slot_profile = original
 
         window = getattr(shell, '_recovery_window', None)
         assert window is not None, '无宠失败必须给出可见恢复窗'
